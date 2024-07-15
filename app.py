@@ -1,7 +1,9 @@
+import asyncio
 import functools
 import inspect
 import threading
 import time
+from queue import Queue, Empty
 from typing import Tuple, Callable, Any
 from venv import logger
 
@@ -31,8 +33,6 @@ celery.conf.update(
     task_annotations={'*': {'rate_limit': '8/s'}}
 )
 
-semaphore = threading.Semaphore(8)
-
 
 # limiter = Limiter(
 #     get_remote_address,
@@ -45,10 +45,7 @@ semaphore = threading.Semaphore(8)
 
 @celery.task(rate_limit='8/s')
 def send_to_receiver(message_data):
-    semaphore.acquire()
     message = Message.from_json(message_data)
-    time.sleep(1)
-    semaphore.release()
 
 
 def parse_rate(rate: str) -> Tuple[int, int]:
@@ -63,6 +60,9 @@ def parse_rate(rate: str) -> Tuple[int, int]:
     duration_base = {"s": 1, "m": 60, "h": 3600, "d": 86400}[duration_unit]
     duration = duration_base * duration_multiplier
     return num_requests, duration
+
+
+queue = Queue()
 
 
 @app.route('/webhook', methods=['POST'])
@@ -83,15 +83,31 @@ def webhook():
     if not exist:
         redis.set(message.message_id, message.text, ex=300)
 
-    with semaphore:
-        semaphore.acquire()
-        task = send_to_receiver.delay(message.to_json())
-        logger.info(f"task: {task}")
-        time.sleep(0.5)
-        semaphore.release()
+    # task = send_to_receiver.delay(message.to_json())
+    # logger.info(f"task: {task}")
+    queue.put(message)
 
     response.headers['X-Celery-ID'] = message.message_id or 'duplicate'
     return response, 200
+
+
+def process_messages(rate=8):
+    while True:
+        try:
+            message = queue.get(timeout=1)
+            task = send_to_receiver.delay(message.to_json())
+            print(f"Processed: {message}")
+            time.sleep(1 / rate)
+            queue.task_done()
+        except Empty:
+            print(f"Queue is empty")
+            time.sleep(1)
+            pass
+
+
+messages_thread = threading.Thread(target=process_messages)
+messages_thread.daemon = True
+messages_thread.start()
 
 
 @app.route('/')

@@ -1,0 +1,6 @@
+Flask
+redis
+celery
+requests
+flask_limiter
+locust

@@ -1,0 +1,48 @@
+services:
+  redis:
+    container_name: "redis"
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  web:
+    build: .
+    container_name: "flask"
+    command: flask run --host=0.0.0.0 --port=5000
+    volumes:
+      - .:/code
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_APP=app.py
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+    depends_on:
+      - redis
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  worker:
+    container_name: "worker"
+    build: .
+    command: celery -A app.celery_app worker --loglevel=info
+    volumes:
+      - .:/code
+    depends_on:
+      - redis
+      - web
+
+  locust:
+    image: locustio/locust
+    ports:
+      - "8089:8089"
+    volumes:
+      - ./locustfile.py:/locust/locustfile.py
+    command: -f /locust/locustfile.py
+    depends_on:
+      - web
+
+volumes:
+  redis_data:

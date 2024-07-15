@@ -1,37 +1,68 @@
+import functools
+import inspect
+import threading
+import time
+from typing import Tuple, Callable, Any
+from venv import logger
+
 import requests
 from celery import Celery
 from flask import Flask, request, jsonify
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from redis import Redis
 
 from message import Message
 
-redis_url = 'redis://redis:6379'
+redis_url = 'redis://localhost:6379/0'
+rabbit_url = 'amqp://guest:guest@localhost:5672/'
 app = Flask(__name__)
 app.config['CELERY_BROKER_URL'] = redis_url
 app.config['CELERY_RESULT_BACKEND'] = redis_url
 
-celery_app = Celery(app.name)
-celery_app.conf.update(
-    broker_url=redis_url,
-    result_backend=redis_url,
+redis = Redis(host='localhost', port=6379, db=0)
+celery = Celery(
+    app.import_name,
+    broker=rabbit_url,
+    backend="rpc://",
 )
 
-redis = Redis(host='redis', port=6379, db=0)
+celery.conf.update(
+    task_annotations={'*': {'rate_limit': '8/s'}}
+)
+
+semaphore = threading.Semaphore(8)
+
 
 # limiter = Limiter(
 #     get_remote_address,
-#     app=app,
+#     app=celery,
 #     default_limits=["500/second"],
 #     storage_uri="redis://localhost:6379",
 #     storage_options={"socket_connect_timeout": 30},
 # )
 
 
-@celery_app.task(rate_limit='8/s', bind=True)
-def send_to_receiver(self, data):
-    headers = {'X-Celery-ID': self.request.id}
-    response = requests.post('https://chatbot.com/webhook', json=data, headers=headers)
-    return response.status_code
+@celery.task(rate_limit='8/s')
+def send_to_receiver(message_data):
+    semaphore.acquire()
+    message = Message.from_json(message_data)
+    time.sleep(1)
+    semaphore.release()
+
+
+def parse_rate(rate: str) -> Tuple[int, int]:
+    num, period = rate.split("/")
+    num_requests = int(num)
+    if len(period) > 1:
+        duration_multiplier = int(period[:-1])
+        duration_unit = period[-1]
+    else:
+        duration_multiplier = 1
+        duration_unit = period[-1]
+    duration_base = {"s": 1, "m": 60, "h": 3600, "d": 86400}[duration_unit]
+    duration = duration_base * duration_multiplier
+    return num_requests, duration
 
 
 @app.route('/webhook', methods=['POST'])
@@ -46,14 +77,20 @@ def webhook():
         response.status = err
         return response, 200
 
-    print("request message: ", message)
+    logger.info(f"request message: {message}")
 
-    if not redis.exists(message.message_id):
+    exist = redis.exists(message.message_id)
+    if not exist:
         redis.set(message.message_id, message.text, ex=300)
-        task = send_to_receiver.delay(data_json)
-        task_id = task.id
 
-    response.headers['X-Celery-ID'] = task_id or 'duplicate'
+    with semaphore:
+        semaphore.acquire()
+        task = send_to_receiver.delay(message.to_json())
+        logger.info(f"task: {task}")
+        time.sleep(0.5)
+        semaphore.release()
+
+    response.headers['X-Celery-ID'] = message.message_id or 'duplicate'
     return response, 200
 
 

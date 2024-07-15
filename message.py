@@ -1,3 +1,6 @@
+import pika
+
+
 class Message:
     def __init__(self, message_id, text, from_id):
         self.message_id = message_id
@@ -18,3 +21,9 @@ class Message:
 
     def __str__(self):
         return f"№{self.message_id} text: {self.text} by user_id: {self.from_id}"
+
+    def to_json(self):
+        return {
+            'message_id': self.message_id,
+            'text': self.text
+        }

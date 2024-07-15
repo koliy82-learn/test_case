@@ -1,8 +1,11 @@
 # Используем официальный образ Python
-FROM python:3.9-slim
+FROM python:3.9
 
 # Устанавливаем рабочий каталог
 WORKDIR /code
+
+#pip
+RUN python -m pip install --upgrade pip
 
 # Копируем зависимости и устанавливаем их
 COPY requirements.txt .

@@ -1,17 +1,11 @@
-import asyncio
-import functools
-import inspect
 import threading
 import time
 from queue import Queue, Empty
-from typing import Tuple, Callable, Any
+from typing import Tuple
 from venv import logger
 
-import requests
 from celery import Celery
 from flask import Flask, request, jsonify
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 from redis import Redis
 
 from message import Message
@@ -95,7 +89,7 @@ def process_messages(rate=8):
     while True:
         try:
             message = queue.get(timeout=1)
-            task = send_to_receiver.delay(message.to_json())
+            send_to_receiver.delay(message.to_json())
             print(f"Processed: {message}")
             time.sleep(1 / rate)
             queue.task_done()

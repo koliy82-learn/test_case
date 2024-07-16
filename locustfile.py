@@ -11,8 +11,8 @@ class UserBehavior(TaskSet):
         headers = {'Content-Type': 'application/json'}
         data = {
             "from_id": 12345,
-            "message_id": "random.randint(1, 1000)",
-            "text": "str(uuid.uuid4())"
+            "message_id": random.randint(1, 100000),
+            "text": str(uuid.uuid4())
         }
         self.client.post("/webhook", json=data, headers=headers)
 

@@ -21,13 +21,14 @@ services:
       - FLASK_DEBUG=1
     depends_on:
       - redis
+      - rabbitmq
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
   worker:
     container_name: "worker"
     build: .
-    command: celery -A app.celery_app worker --loglevel=info
+    command: celery -A app.celery worker --loglevel=info -Q default
     volumes:
       - .:/code
     depends_on:

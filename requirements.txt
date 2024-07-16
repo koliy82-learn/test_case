@@ -4,3 +4,4 @@ celery
 requests
 flask_limiter
 locust
+pika

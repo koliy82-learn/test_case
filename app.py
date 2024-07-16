@@ -1,7 +1,6 @@
 import threading
 import time
 from queue import Queue, Empty
-from typing import Tuple
 from venv import logger
 
 from celery import Celery
@@ -10,50 +9,28 @@ from redis import Redis
 
 from message import Message
 
-redis_url = 'redis://localhost:6379/0'
-rabbit_url = 'amqp://guest:guest@localhost:5672/'
+host = "host.docker.internal"
+redis_url = f'redis://{host}:6379/0'
+rabbit_url = f'amqp://guest:guest@{host}:5672/'
 app = Flask(__name__)
 app.config['CELERY_BROKER_URL'] = redis_url
 app.config['CELERY_RESULT_BACKEND'] = redis_url
 
-redis = Redis(host='localhost', port=6379, db=0)
+redis = Redis(host=host, port=6379, db=0)
 celery = Celery(
     app.import_name,
     broker=rabbit_url,
     backend="rpc://",
 )
 
-celery.conf.update(
-    task_annotations={'*': {'rate_limit': '8/s'}}
-)
-
-
-# limiter = Limiter(
-#     get_remote_address,
-#     app=celery,
-#     default_limits=["500/second"],
-#     storage_uri="redis://localhost:6379",
-#     storage_options={"socket_connect_timeout": 30},
+# celery.conf.update(
+#     task_annotations={'*': {'rate_limit': '8/s'}}
 # )
 
 
 @celery.task(rate_limit='8/s')
 def send_to_receiver(message_data):
     message = Message.from_json(message_data)
-
-
-def parse_rate(rate: str) -> Tuple[int, int]:
-    num, period = rate.split("/")
-    num_requests = int(num)
-    if len(period) > 1:
-        duration_multiplier = int(period[:-1])
-        duration_unit = period[-1]
-    else:
-        duration_multiplier = 1
-        duration_unit = period[-1]
-    duration_base = {"s": 1, "m": 60, "h": 3600, "d": 86400}[duration_unit]
-    duration = duration_base * duration_multiplier
-    return num_requests, duration
 
 
 queue = Queue()
@@ -63,7 +40,6 @@ queue = Queue()
 def webhook():
     response = jsonify(success=True)
     data_json = request.get_json()
-    task_id = None
 
     try:
         message = Message.from_json(data_json)
@@ -71,14 +47,12 @@ def webhook():
         response.status = err
         return response, 200
 
-    logger.info(f"request message: {message}")
+    logger.debug(f"request message: {message}")
 
     exist = redis.exists(message.message_id)
     if not exist:
         redis.set(message.message_id, message.text, ex=300)
 
-    # task = send_to_receiver.delay(message.to_json())
-    # logger.info(f"task: {task}")
     queue.put(message)
 
     response.headers['X-Celery-ID'] = message.message_id or 'duplicate'
@@ -90,11 +64,11 @@ def process_messages(rate=8):
         try:
             message = queue.get(timeout=1)
             send_to_receiver.delay(message.to_json())
-            print(f"Processed: {message}")
+            print(f"Processed message: {message}")
             time.sleep(1 / rate)
             queue.task_done()
         except Empty:
-            print(f"Queue is empty")
+            logger.debug("Message queue is empty")
             time.sleep(1)
             pass
 
@@ -102,11 +76,6 @@ def process_messages(rate=8):
 messages_thread = threading.Thread(target=process_messages)
 messages_thread.daemon = True
 messages_thread.start()
-
-
-@app.route('/')
-def hello_world():  # put application's code here
-    return 'Hello World!'
 
 
 if __name__ == '__main__':
